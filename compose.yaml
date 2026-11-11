@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: analytics
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env and set POSTGRES_PASSWORD}
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics -d analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  api:
+    image: storescope-app:1.0.0
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://analytics:${POSTGRES_PASSWORD}@db:5432/analytics
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+  dashboard:
+    image: storescope-web:1.0.0
+    build:
+      context: .
+      dockerfile: infra/docker/frontend.Dockerfile
+    ports: ["127.0.0.1:8080:80"]
+    depends_on:
+      api: {condition: service_healthy}
+  generator:
+    image: storescope-app:1.0.0
+    profiles: ["tools"]
+    command: ["python", "-m", "generator.generate", "--rows", "100000", "--output", "/data/raw"]
+    volumes: ["sales_data:/data"]
+  pipeline:
+    image: storescope-app:1.0.0
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgresql://analytics:${POSTGRES_PASSWORD}@db:5432/analytics
+      SPARK_MASTER: local[2]
+      PYSPARK_SUBMIT_ARGS: --master local[2] --driver-memory 1g --conf spark.sql.shuffle.partitions=4 pyspark-shell
+    command: ["python", "-m", "pipeline.run", "--engine", "spark", "--input", "${SALES_INPUT:-/data/raw}", "--output", "/data/processed"]
+    volumes: ["sales_data:/data"]
+    depends_on:
+      db: {condition: service_healthy}
+  ingest:
+    image: storescope-app:1.0.0
+    profiles: ["tools"]
+    command: ["python", "-m", "pipeline.ingest", "--source", "${RETAIL_SOURCE:-uci}", "--output", "${SALES_INPUT:-/data/retail}", "--limit", "${RETAIL_LIMIT:-100000}"]
+    volumes: ["sales_data:/data"]
+volumes:
+  postgres_data:
+  sales_data:

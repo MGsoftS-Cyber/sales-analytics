@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: process-sales
+  namespace: storescope
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+      - name: task
+        image: storescope-app:1.0.0
+        imagePullPolicy: IfNotPresent
+        command:
+        - python
+        - -m
+        - pipeline.run
+        - --engine
+        - spark
+        - --input
+        - /data/raw
+        - --output
+        - /data/processed
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: '2'
+            memory: 3Gi
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: database
+              key: url
+        - name: PYSPARK_SUBMIT_ARGS
+          value: --master local[2] --driver-memory 1g --conf spark.sql.shuffle.partitions=4
+            pyspark-shell
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sales-data
